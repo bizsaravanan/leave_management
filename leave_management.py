@@ -10,10 +10,8 @@ EXCEL_FILE = 'leave_management.xlsx'
 def initialize_excel():
     if not os.path.exists(EXCEL_FILE):
         with pd.ExcelWriter(EXCEL_FILE, engine='openpyxl') as writer:
-            # Summary Sheet
             summary_cols = ['ID', 'Employee', 'CL_Total', 'CL_Rem', 'SL_Total', 'SL_Rem', 'PL_Total', 'PL_Rem']
             pd.DataFrame(columns=summary_cols).to_excel(writer, sheet_name='Summary', index=False)
-            # Logs Sheet
             log_cols = ['ID', 'Employee', 'Date', 'Month', 'Leave_Type', 'Reason']
             pd.DataFrame(columns=log_cols).to_excel(writer, sheet_name='Logs', index=False)
 
@@ -50,6 +48,8 @@ class LeaveApp:
         tk.Label(frame_apply, text="Employee:").grid(row=0, column=0)
         self.emp_combo = ttk.Combobox(frame_apply, postcommand=self.refresh_list, width=30)
         self.emp_combo.grid(row=0, column=1, padx=5)
+        # Bind the selection event to update history
+        self.emp_combo.bind("<<ComboboxSelected>>", self.on_employee_select)
 
         tk.Label(frame_apply, text="Type:").grid(row=0, column=2)
         self.type_combo = ttk.Combobox(frame_apply, values=["Casual Leave", "Sick Leave", "Privilege Leave"], width=15)
@@ -67,7 +67,8 @@ class LeaveApp:
             row=1, column=6, padx=10)
 
         # --- SECTION 3: VIEW LOGS ---
-        tk.Label(root, text="Recent Leave Logs (Global)", font=("Arial", 10, "bold")).pack(pady=5)
+        self.label_tree = tk.Label(root, text="Employee Leave History", font=("Arial", 10, "bold"))
+        self.label_tree.pack(pady=5)
         self.tree = ttk.Treeview(root, columns=("ID", "Name", "Date", "Type", "Reason"), show='headings')
         for col in ("ID", "Name", "Date", "Type", "Reason"):
             self.tree.heading(col, text=col)
@@ -76,6 +77,12 @@ class LeaveApp:
     def refresh_list(self):
         df = pd.read_excel(EXCEL_FILE, sheet_name='Summary', dtype={'ID': str})
         self.emp_combo['values'] = [f"{row['ID']} | {row['Employee']}" for _, row in df.iterrows()]
+
+    def on_employee_select(self, event):
+        selected_val = self.emp_combo.get()
+        if selected_val:
+            eid = selected_val.split(" | ")[0]
+            self.update_treeview(emp_id=eid)
 
     def add_or_update(self):
         data = {k: v.get().strip() for k, v in self.reg_entries.items()}
@@ -86,7 +93,6 @@ class LeaveApp:
         df = pd.read_excel(EXCEL_FILE, sheet_name='Summary', dtype={'ID': str})
         eid = data["ID:"]
 
-        # Calculate Remaining = New Quota (assuming starting fresh or resetting)
         new_row_data = {
             'ID': eid, 'Employee': data["Name:"],
             'CL_Total': int(data["CL Quota:"]), 'CL_Rem': int(data["CL Quota:"]),
@@ -104,16 +110,16 @@ class LeaveApp:
         messagebox.showinfo("Success", "Employee Record Saved")
 
     def apply_leave(self):
-        if not (self.emp_combo.get() and self.type_combo.get()):
+        emp_val = self.emp_combo.get()
+        if not (emp_val and self.type_combo.get()):
             messagebox.showerror("Error", "Selection incomplete")
             return
 
-        eid = self.emp_combo.get().split(" | ")[0]
+        eid = emp_val.split(" | ")[0]
         l_type = self.type_combo.get()
         reason = self.reason_ent.get()
         date_sel = self.cal.get_date()
 
-        # Mapping UI text to Column Prefix
         mapping = {"Casual Leave": "CL", "Sick Leave": "SL", "Privilege Leave": "PL"}
         prefix = mapping[l_type]
 
@@ -121,10 +127,7 @@ class LeaveApp:
         idx = summary_df.index[summary_df['ID'] == eid].tolist()[0]
 
         if summary_df.at[idx, f'{prefix}_Rem'] >= 1:
-            # Update Summary
             summary_df.at[idx, f'{prefix}_Rem'] -= 1
-
-            # Update Logs
             log_df = pd.read_excel(EXCEL_FILE, sheet_name='Logs', dtype={'ID': str})
             new_log = {
                 'ID': eid, 'Employee': summary_df.at[idx, 'Employee'],
@@ -138,14 +141,19 @@ class LeaveApp:
                 log_df.to_excel(writer, sheet_name='Logs', index=False)
 
             messagebox.showinfo("Approved", "Leave Logged Successfully")
-            self.update_treeview()
+            self.update_treeview(emp_id=eid)  # Refresh for the specific employee
         else:
             messagebox.showwarning("Denied", f"No {l_type} balance left!")
 
-    def update_treeview(self):
+    def update_treeview(self, emp_id=None):
         for i in self.tree.get_children(): self.tree.delete(i)
         log_df = pd.read_excel(EXCEL_FILE, sheet_name='Logs', dtype={'ID': str})
-        for _, row in log_df.tail(10).iterrows():  # Show last 10 entries
+
+        # Filter logic
+        if emp_id:
+            log_df = log_df[log_df['ID'] == emp_id]
+
+        for _, row in log_df.tail(10).iterrows():
             self.tree.insert("", 0, values=(row['ID'], row['Employee'], row['Date'], row['Leave_Type'], row['Reason']))
 
 
